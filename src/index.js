@@ -13,6 +13,15 @@ import { renderAdminHtml } from './admin.js';
 
 const BILIBILI_API = 'https://api.live.bilibili.com';
 const QQ_API = 'https://api.bot.qq.com';
+const BILIBILI_HEADERS = {
+  Accept: 'application/json, text/plain, */*',
+  'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+  'Cache-Control': 'no-cache',
+  Pragma: 'no-cache',
+  Origin: 'https://live.bilibili.com',
+  Referer: 'https://live.bilibili.com/',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
+};
 // A Cron invocation can run for up to 15 minutes. Keep the lease alive for
 // the full window so a slow scan cannot overlap with the next invocation.
 const LOCK_SECONDS = 15 * 60;
@@ -352,9 +361,15 @@ async function resolveInput(input, env) {
 
 async function biliFetch(path) {
   const response = await fetch(`${BILIBILI_API}${path}`, {
-    headers: { 'User-Agent': 'bilibili-live-monitor-worker/1.0', Referer: 'https://live.bilibili.com/' },
+    headers: BILIBILI_HEADERS,
+    cf: { cacheTtl: 0, cacheEverything: false },
   });
-  if (!response.ok) throw httpError(502, `B站接口 HTTP ${response.status}`);
+  if (!response.ok) {
+    const body = (await response.text()).slice(0, 180).replace(/\s+/g, ' ');
+    const error = httpError(502, `B站接口 HTTP ${response.status}${body ? `：${body}` : ''}`);
+    error.upstreamStatus = response.status;
+    throw error;
+  }
   const payload = await response.json();
   if (payload.code !== 0) throw httpError(502, `B站接口错误 ${payload.code}`);
   return payload;
@@ -364,6 +379,25 @@ async function biliBatchFetch(uids) {
   const params = new URLSearchParams();
   for (const uid of uids) params.append('uids[]', uid);
   return biliFetch(`/room/v1/Room/get_status_info_by_uids?${params}`);
+}
+
+async function biliRoomFallback(rows) {
+  const output = {};
+  for (const row of rows) {
+    const payload = await biliFetch(`/xlive/web-room/v1/index/getInfoByRoom?room_id=${encodeURIComponent(row.room_id || row.source_id)}`);
+    const room = payload.data?.room_info;
+    if (!room?.uid || !room?.room_id) continue;
+    const anchor = payload.data?.anchor_info?.base_info;
+    output[String(row.uid)] = {
+      uid: room.uid,
+      room_id: room.room_id,
+      title: room.title || '',
+      live_status: room.live_status,
+      online: room.online || 0,
+      uname: anchor?.uname || row.label || '',
+    };
+  }
+  return output;
 }
 
 async function health(env) {
@@ -480,8 +514,18 @@ async function processMonitorRows(rows, settings, env) {
   try {
     payload = await biliBatchFetch(uniqueUids);
   } catch (error) {
-    await markBatchError(rows, publicError(error), env);
-    return { checked: 0 };
+    if (error.upstreamStatus === 412 && rows.length <= 10) {
+      try {
+        const fallbackData = await biliRoomFallback(rows);
+        payload = { data: fallbackData };
+      } catch (fallbackError) {
+        await markBatchError(rows, `${publicError(error)}；备用接口：${publicError(fallbackError)}`, env);
+        return { checked: 0 };
+      }
+    } else {
+      await markBatchError(rows, publicError(error), env);
+      return { checked: 0 };
+    }
   }
   const byUid = payload.data || {};
   const valid = rows.map(row => ({ row, info: byUid[String(row.uid)] })).filter(item => item.info);
