@@ -9,6 +9,7 @@ import {
   parseLiveStatus,
   retryDelaySeconds,
 } from './core.js';
+import { renderAdminHtml } from './admin.js';
 
 const BILIBILI_API = 'https://api.live.bilibili.com';
 const QQ_API = 'https://api.bot.qq.com';
@@ -27,7 +28,7 @@ export default {
         return cors(await health(env));
       }
       if (url.pathname === '/admin' && request.method === 'GET') {
-        return new Response(adminHtml(), { headers: { 'content-type': 'text/html; charset=utf-8' } });
+        return new Response(renderAdminHtml(), { headers: { 'content-type': 'text/html; charset=utf-8' } });
       }
       if (url.pathname === '/api/auth/status' && request.method === 'GET') return cors(json(await authStatus(env)));
       if (url.pathname === '/api/auth/setup' && request.method === 'POST') return cors(await setupPassword(request, env));
