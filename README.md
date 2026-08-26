@@ -25,7 +25,7 @@ CLOUDFLARE_ACCOUNT_ID
 
 API Token 需要有 Workers 部署和 D1 编辑权限。工作流会通过 Cloudflare API 查找名为 `bilibili-live-monitor` 的 D1；不存在时自动创建，然后自动写入本次部署使用的数据库 ID。
 
-之后打开仓库的 `Actions -> Deploy Cloudflare Worker -> Run workflow`，点击运行即可自动完成测试、D1 创建/查找、D1 迁移和 Worker 部署。上述两个 Secrets 只用于 GitHub Actions，不是 Worker 运行时环境变量。
+推送到 `main` 会自动完成测试、D1 创建/查找、D1 迁移和 Worker 部署；也可以在 `Actions -> Deploy Cloudflare Worker -> Run workflow` 手动运行。上述两个 Secrets 只用于 GitHub Actions，不是 Worker 运行时环境变量。
 
 需要安装 Wrangler 并登录 Cloudflare：
 
