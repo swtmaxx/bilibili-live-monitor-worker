@@ -28,14 +28,33 @@ jobs:
       - name: Install Wrangler
         run: npm install --global wrangler@latest
 
-      - name: Inject D1 database ID for this deployment
+      - name: Find or create D1 database
         env:
-          D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           node --input-type=module -e "
             import fs from 'node:fs';
-            const id = (process.env.D1_DATABASE_ID || '').trim();
-            if (!/^[A-Za-z0-9_-]{8,}$/.test(id)) throw new Error('Missing or invalid CLOUDFLARE_D1_DATABASE_ID');
+            const token = (process.env.CLOUDFLARE_API_TOKEN || '').trim();
+            const account = (process.env.CLOUDFLARE_ACCOUNT_ID || '').trim();
+            if (!token || !account) throw new Error('Missing CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID');
+            const headers = { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' };
+            const base = 'https://api.cloudflare.com/client/v4/accounts/' + account + '/d1/database';
+            const listResponse = await fetch(base + '?name=bilibili-live-monitor', { headers });
+            const list = await listResponse.json();
+            if (!listResponse.ok || list.success !== true) throw new Error('D1 lookup failed: ' + JSON.stringify(list.errors));
+            let database = (list.result || []).find(item => item.name === 'bilibili-live-monitor');
+            if (!database) {
+              const createResponse = await fetch(base, { method: 'POST', headers, body: JSON.stringify({ name: 'bilibili-live-monitor' }) });
+              const created = await createResponse.json();
+              if (!createResponse.ok || created.success !== true || !created.result?.uuid) throw new Error('D1 creation failed: ' + JSON.stringify(created.errors));
+              database = created.result;
+              console.log('Created D1 database bilibili-live-monitor');
+            } else {
+              console.log('Using existing D1 database bilibili-live-monitor');
+            }
+            const id = String(database.uuid || '').trim();
+            if (!/^[A-Za-z0-9_-]{8,}$/.test(id)) throw new Error('Cloudflare returned an invalid D1 database UUID');
             const path = 'wrangler.toml';
             const text = fs.readFileSync(path, 'utf8');
             const updated = text.replace(/database_id\s*=\s*\"[^\"]+\"/, 'database_id = \"' + id + '\"');
