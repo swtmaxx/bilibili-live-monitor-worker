@@ -1,0 +1,12 @@
+name = "bilibili-live-monitor"
+main = "src/index.js"
+compatibility_date = "2026-08-26"
+
+[triggers]
+crons = ["* * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "bilibili-live-monitor"
+database_id = "REPLACE_AFTER_WRANGLER_D1_CREATE"
+migrations_dir = "migrations"
