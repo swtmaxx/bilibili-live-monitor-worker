@@ -1,0 +1,56 @@
+name: Deploy Cloudflare Worker
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate project
+        run: |
+          npm run check
+          npm test
+
+      - name: Install Wrangler
+        run: npm install --global wrangler@latest
+
+      - name: Inject D1 database ID for this deployment
+        env:
+          D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
+        run: |
+          node --input-type=module -e "
+            import fs from 'node:fs';
+            const id = (process.env.D1_DATABASE_ID || '').trim();
+            if (!/^[A-Za-z0-9_-]{8,}$/.test(id)) throw new Error('Missing or invalid CLOUDFLARE_D1_DATABASE_ID');
+            const path = 'wrangler.toml';
+            const text = fs.readFileSync(path, 'utf8');
+            const updated = text.replace(/database_id\s*=\s*\"[^\"]+\"/, 'database_id = \"' + id + '\"');
+            if (updated === text) throw new Error('database_id entry not found in wrangler.toml');
+            fs.writeFileSync(path, updated);
+          "
+
+      - name: Apply D1 migrations
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: wrangler d1 migrations apply bilibili-live-monitor --remote
+
+      - name: Deploy Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: wrangler deploy

@@ -14,6 +14,20 @@ Cloudflare Workers + D1 的 Bilibili 直播状态监控器。每分钟由 Cron �
 
 ## 部署
 
+### GitHub Actions 一键部署
+
+仓库中的 `.github/workflows/deploy.yml` 支持手动部署。第一次需要在 GitHub 仓库的 `Settings -> Secrets and variables -> Actions` 添加以下 Secrets：
+
+```text
+CLOUDFLARE_API_TOKEN
+CLOUDFLARE_ACCOUNT_ID
+CLOUDFLARE_D1_DATABASE_ID
+```
+
+其中 API Token 需要有 Workers 部署和 D1 编辑权限。创建 D1 后复制它的 ID，填入 `CLOUDFLARE_D1_DATABASE_ID`。
+
+之后打开仓库的 `Actions -> Deploy Cloudflare Worker -> Run workflow`，点击运行即可自动完成测试、D1 迁移和 Worker 部署。上述三个 Secrets 只用于 GitHub Actions，不是 Worker 运行时环境变量。
+
 需要安装 Wrangler 并登录 Cloudflare：
 
 ```bash
