@@ -11,6 +11,7 @@ Cloudflare Workers + D1 的 Bilibili 直播状态监控器。每分钟由 Cron �
 - QQ AccessToken 内存缓存，401 自动刷新并重试一次。
 - D1 outbox 记录通知，发送失败指数退避，最多 8 次。
 - 管理页内置在 Worker 的 `/admin`；首次打开时设置管理员密码，之后使用 D1 会话登录，浏览器只保存短期会话令牌。
+- 支持在管理页配置 B站代理数据源；代理令牌只存入 D1，不会在接口响应或日志中回显。
 
 ## 部署
 
@@ -72,6 +73,9 @@ https://你的Worker域名/admin
 2. 在“通知目标”中添加 QQ 私聊 `user_openid` 或群聊 `group_openid`。
 3. 在“设置”中选择检查间隔、开播/下播通知和文本/Markdown 格式。
 4. 点击“立即检查”验证查询和状态更新。
+5. 如果状态中出现 `B站接口 HTTP 412`，在“B站数据源”填写一个运行在非 Cloudflare 出口上的 HTTPS 代理地址。代理需要接收 Worker 追加的原始 B站路径，并原样返回 B站 JSON；例如 Worker 请求 `/room/v1/Room/get_status_info_by_uids?...` 时，代理请求同一路径到 `https://api.live.bilibili.com`。代理令牌会以 `Authorization: Bearer ...` 发送。
+
+留空代理地址时使用官方 B站接口。Cloudflare Worker 自身不能通过另一个 Cloudflare Worker 获得新的出口 IP；两者仍可能被 B站按 Cloudflare 共享出口一起拦截。
 
 API 管理请求均需携带登录后得到的会话令牌：
 

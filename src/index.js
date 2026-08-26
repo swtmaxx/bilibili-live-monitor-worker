@@ -48,6 +48,8 @@ export default {
       if (url.pathname === '/api/auth/logout' && request.method === 'POST') return cors(await logout(request, env));
 
       if (url.pathname === '/api/status' && request.method === 'GET') return cors(json(await status(env)));
+      if (url.pathname === '/api/bilibili-config' && request.method === 'GET') return cors(json(await getPublicBilibiliConfig(env)));
+      if (url.pathname === '/api/bilibili-config' && request.method === 'PUT') return cors(await updateBilibiliConfig(request, env));
       if (url.pathname === '/api/qq-config' && request.method === 'GET') return cors(json(await getPublicQQConfig(env)));
       if (url.pathname === '/api/qq-config' && request.method === 'PUT') return cors(await updateQQConfig(request, env));
       if (url.pathname === '/api/monitors' && request.method === 'GET') return cors(json(await listMonitors(env)));
@@ -250,6 +252,30 @@ async function getPublicQQConfig(env) {
   return { app_id: config.appId, client_secret_configured: Boolean(config.clientSecret) };
 }
 
+async function getBilibiliConfig(env) {
+  const row = await queryOne(env, 'SELECT base_url, access_token FROM bilibili_config WHERE id=1');
+  return { baseUrl: row?.base_url || '', accessToken: row?.access_token || '' };
+}
+
+async function getPublicBilibiliConfig(env) {
+  const config = await getBilibiliConfig(env);
+  return { base_url: config.baseUrl, access_token_configured: Boolean(config.accessToken) };
+}
+
+async function updateBilibiliConfig(request, env) {
+  const input = await readJson(request);
+  const current = await getBilibiliConfig(env);
+  const baseUrl = String(input.base_url ?? current.baseUrl).trim().replace(/\/+$/, '');
+  const incomingToken = String(input.access_token ?? '').trim();
+  const accessToken = input.clear_access_token ? '' : (incomingToken || current.accessToken);
+  if (baseUrl && !/^https:\/\//i.test(baseUrl)) throw httpError(422, 'B站数据源地址必须使用 HTTPS');
+  if (baseUrl.length > 512) throw httpError(422, 'B站数据源地址不能超过 512 个字符');
+  if (accessToken.length > 1024) throw httpError(422, 'B站代理令牌不能超过 1024 个字符');
+  await env.DB.prepare('UPDATE bilibili_config SET base_url=?, access_token=?, updated_at=? WHERE id=1')
+    .bind(baseUrl, accessToken, nowIso()).run();
+  return json({ ok: true, ...(await getPublicBilibiliConfig(env)) });
+}
+
 async function updateQQConfig(request, env) {
   const input = await readJson(request);
   const current = await getQQConfig(env);
@@ -348,20 +374,24 @@ async function deleteTarget(id, env) {
 
 async function resolveInput(input, env) {
   if (input.type === 'room') {
-    const payload = await biliFetch(`/room/v1/Room/get_info?room_id=${encodeURIComponent(input.sourceId)}`);
+    const payload = await biliFetch(`/room/v1/Room/get_info?room_id=${encodeURIComponent(input.sourceId)}`, env);
     const data = payload.data || {};
     if (!data.uid || !data.room_id) throw httpError(422, 'B站直播间不存在或无法解析主播 UID');
     return { uid: String(data.uid), roomId: String(data.room_id), uname: data.uname || '' };
   }
-  const payload = await biliBatchFetch([input.sourceId]);
+  const payload = await biliBatchFetch([input.sourceId], env);
   const data = payload.data?.[input.sourceId];
   if (!data?.uid || !data?.room_id) throw httpError(422, 'B站 UID 不存在或无法解析直播间');
   return { uid: String(data.uid), roomId: String(data.room_id), uname: data.uname || '' };
 }
 
-async function biliFetch(path) {
-  const response = await fetch(`${BILIBILI_API}${path}`, {
-    headers: BILIBILI_HEADERS,
+async function biliFetch(path, env) {
+  const config = await getBilibiliConfig(env);
+  const baseUrl = config.baseUrl || BILIBILI_API;
+  const headers = new Headers(BILIBILI_HEADERS);
+  if (config.accessToken) headers.set('Authorization', `Bearer ${config.accessToken}`);
+  const response = await fetch(`${baseUrl}${path}`, {
+    headers,
     cf: { cacheTtl: 0, cacheEverything: false },
   });
   if (!response.ok) {
@@ -375,16 +405,16 @@ async function biliFetch(path) {
   return payload;
 }
 
-async function biliBatchFetch(uids) {
+async function biliBatchFetch(uids, env) {
   const params = new URLSearchParams();
   for (const uid of uids) params.append('uids[]', uid);
-  return biliFetch(`/room/v1/Room/get_status_info_by_uids?${params}`);
+  return biliFetch(`/room/v1/Room/get_status_info_by_uids?${params}`, env);
 }
 
-async function biliRoomFallback(rows) {
+async function biliRoomFallback(rows, env) {
   const output = {};
   for (const row of rows) {
-    const payload = await biliFetch(`/xlive/web-room/v1/index/getInfoByRoom?room_id=${encodeURIComponent(row.room_id || row.source_id)}`);
+    const payload = await biliFetch(`/xlive/web-room/v1/index/getInfoByRoom?room_id=${encodeURIComponent(row.room_id || row.source_id)}`, env);
     const room = payload.data?.room_info;
     if (!room?.uid || !room?.room_id) continue;
     const anchor = payload.data?.anchor_info?.base_info;
@@ -512,11 +542,11 @@ async function processMonitorRows(rows, settings, env) {
   const uniqueUids = [...new Set(rows.map(row => String(row.uid)))];
   let payload;
   try {
-    payload = await biliBatchFetch(uniqueUids);
+    payload = await biliBatchFetch(uniqueUids, env);
   } catch (error) {
     if (error.upstreamStatus === 412 && rows.length <= 10) {
       try {
-        const fallbackData = await biliRoomFallback(rows);
+        const fallbackData = await biliRoomFallback(rows, env);
         payload = { data: fallbackData };
       } catch (fallbackError) {
         await markBatchError(rows, `${publicError(error)}；备用接口：${publicError(fallbackError)}`, env);
